@@ -1,0 +1,13 @@
+[Unit]
+Description=Belabox SRTLA Receiver
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/belabox/srtla
+ExecStart=/opt/belabox/srtla/srtla_rec ${SRTLA_PORT_IN} 0.0.0.0 ${SRTLA_PORT_LOCAL}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
