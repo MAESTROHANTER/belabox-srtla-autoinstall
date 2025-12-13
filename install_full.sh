@@ -86,6 +86,6 @@ systemctl start srtla_rec
 
 echo ""
 echo "=========================================="
-echo "✅ Установка завершена! SRTLA запущен и автозапуск включен."
-echo "Открытые порты: 22/SSH, 5002/SRT вход, 6000/SRT выход"
+echo "✅ Install complete! SRTLA patched + autostartup"
+echo "Open ports: 22/SSH, 5002/SRT in, 6000/SRT out"
 echo "=========================================="
