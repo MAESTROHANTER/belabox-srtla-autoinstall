@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -6,16 +6,28 @@ echo "=========================================="
 echo "BELABOX SRTLA MONOLITH INSTALLER (2025)"
 echo "=========================================="
 
-# 1️⃣ Обновляем пакеты и ставим зависимости (с sudo!)
-sudo apt update
-sudo apt install -y build-essential cmake git libssl-dev pkg-config tcl libva-dev ufw fail2ban wget unzip &>/dev/null || true
+# ──────────────────────────────────────────────
+# ✅ Определяем реального пользователя
+TARGET_USER="${SUDO_USER:-$(whoami)}"
+TARGET_HOME="$(eval echo ~${TARGET_USER})"
 
+echo "Установка для пользователя: $TARGET_USER"
+echo "Домашняя директория пользователя: $TARGET_HOME"
+
+# ──────────────────────────────────────────────
+# 1️⃣ Обновляем пакеты и ставим зависимости
+sudo apt update
+sudo apt install -y build-essential cmake git libssl-dev pkg-config tcl libva-dev ufw fail2ban wget unzip
+
+# ──────────────────────────────────────────────
 # 2️⃣ Создаём рабочую директорию
-BELABOX_DIR=/opt/belabox
-SRTLA_DIR=$BELABOX_DIR/srtla
+BELABOX_DIR="/opt/belabox"
 sudo mkdir -p "$BELABOX_DIR"
+sudo chown "$TARGET_USER":"$TARGET_USER" "$BELABOX_DIR"
+
 cd "$BELABOX_DIR"
 
+# ──────────────────────────────────────────────
 # 3️⃣ Скачиваем и собираем patched SRT
 if [ -d "patched_srt" ]; then
     cd patched_srt
@@ -27,11 +39,13 @@ else
 fi
 
 ./configure --cmake-install-prefix=/usr/local
-make -j$(nproc)
+make -j"$(nproc)"
 sudo make install
 sudo ldconfig
+
 cd "$BELABOX_DIR"
 
+# ──────────────────────────────────────────────
 # 4️⃣ Скачиваем и собираем SRTLA
 if [ -d "srtla" ]; then
     cd srtla
@@ -43,9 +57,11 @@ else
     git clone https://github.com/BELABOX/srtla.git srtla
     cd srtla
 fi
-make clean || true
-make -j$(nproc)
 
+make clean || true
+make -j"$(nproc)"
+
+# ──────────────────────────────────────────────
 # 5️⃣ Настройка безопасности (UFW + Fail2Ban)
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
@@ -60,11 +76,13 @@ sudo sed -i 's/^port *=.*/port = ssh/' /etc/fail2ban/jail.local
 sudo sed -i 's/^maxretry *=.*/maxretry = 5/' /etc/fail2ban/jail.local
 sudo sed -i 's/^bantime *=.*/bantime = 3600/' /etc/fail2ban/jail.local
 sudo sed -i 's/^findtime *=.*/findtime = 600/' /etc/fail2ban/jail.local
+
 sudo systemctl enable fail2ban
 sudo systemctl restart fail2ban
 
-# 6️⃣ Создаём systemd сервис srtla_rec (ИСПРАВЛЕНО: 0.0.0.0 → 127.0.0.1)
-cat >/tmp/srtla_rec.service <<'EOF'
+# ──────────────────────────────────────────────
+# 6️⃣ Создаём systemd сервис srtla_rec
+cat >/tmp/srtla_rec.service <<EOF
 [Unit]
 Description=Belabox SRTLA Receiver
 After=network.target
@@ -72,9 +90,9 @@ Wants=srt_receiver.service
 
 [Service]
 Type=simple
-User=ubuntu
-WorkingDirectory=/opt/belabox/srtla
-ExecStart=/opt/belabox/srtla/srtla_rec 5002 127.0.0.1 5000
+User=$TARGET_USER
+WorkingDirectory=$BELABOX_DIR/srtla
+ExecStart=$BELABOX_DIR/srtla/srtla_rec 5002 127.0.0.1 5000
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -86,8 +104,9 @@ EOF
 
 sudo mv /tmp/srtla_rec.service /etc/systemd/system/srtla_rec.service
 
+# ──────────────────────────────────────────────
 # 7️⃣ Создаём systemd сервис для SRT ретранслятора
-cat >/tmp/srt_receiver.service <<'EOF'
+cat >/tmp/srt_receiver.service <<EOF
 [Unit]
 Description=SRT Receiver (port 5000) → SRT Relay (port 6000)
 After=network.target
@@ -95,12 +114,12 @@ Before=srtla_rec.service
 
 [Service]
 Type=simple
-User=ubuntu
-WorkingDirectory=/opt/belabox
-# Вариант 1: SRT → SRT (рекомендуется)
+User=$TARGET_USER
+WorkingDirectory=$BELABOX_DIR
+
+# Основной запуск: SRT → SRT
 ExecStart=/usr/local/bin/srt-live-transmit "srt://0.0.0.0:5000?mode=listener" "srt://0.0.0.0:6000?mode=listener"
-# Вариант 2: SRT → UDP (если нужен UDP выход)
-# ExecStart=/usr/local/bin/srt-live-transmit "srt://0.0.0.0:5000?mode=listener" "udp://0.0.0.0:6000"
+
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -112,13 +131,17 @@ EOF
 
 sudo mv /tmp/srt_receiver.service /etc/systemd/system/srt_receiver.service
 
+# ──────────────────────────────────────────────
 # 8️⃣ Включаем и запускаем сервисы
 sudo systemctl daemon-reload
 sudo systemctl enable srt_receiver srtla_rec
 sudo systemctl start srt_receiver
-sleep 2  # Даём время запуститься srt_receiver
+
+sleep 2
+
 sudo systemctl start srtla_rec
 
+# ──────────────────────────────────────────────
 # 9️⃣ Проверяем статус
 echo ""
 echo "=========================================="
@@ -129,32 +152,34 @@ echo ""
 sudo systemctl status srtla_rec --no-pager
 echo ""
 
-# 🔟 Проверяем открытые порты
 echo "=========================================="
-echo "Проверка открытых портов:"
+echo "Проверяем открытые порты:"
 echo "=========================================="
 sudo ss -tulpn | grep -E ':(5000|5002|6000)' || true
-
 echo ""
+
 echo "=========================================="
 echo "✅ Установка завершена! SRTLA запущен и настроен."
 echo ""
-echo "Настройки для Belabox:"
-echo "  Протокол: SRTLA"
-echo "  Адрес: srtla://ВАШ_IP:5002"
+
+# ──────────────────────────────────────────────
+# 🔁 Получаем внешний IP автоматически
+EXT_IP=$(curl -s ifconfig.me || echo "ВАШ_IP_НЕ_ОПРЕДЕЛЕН")
+
+echo "Ваш внешний IP: $EXT_IP"
 echo ""
-echo "Настройки для клиентов (приём потока):"
-echo "  Вариант 1 (SRT): srt://ВАШ_IP:6000?mode=caller&latency=200000"
-echo "  Вариант 2 (UDP): udp://ВАШ_IP:6000 (если выбран UDP выход)"
+
+# ──────────────────────────────────────────────
+# 📌 Информация для клиента и OBS
+echo "Настройки для Belabox (SRTLA):"
+echo "  srtla://$EXT_IP:5002"
+echo ""
+echo "Настройки для приёма потока (OBS):"
+echo "  srt://$EXT_IP:6000/?streamid=play/stream/<your_stream_id>"
 echo ""
 echo "Открытые порты:"
-echo "  22/tcp    - SSH"
-echo "  5002/udp  - Входящий SRTLA (от Belabox)"
-echo "  6000/udp  - Исходящий SRT/UDP (для клиентов)"
-echo "=========================================="
-
-# Показываем внешний IP
-EXT_IP=$(curl -s ifconfig.me)
+echo "  22/tcp  - SSH"
+echo "  5002/udp - входящий SRTLA (от Belabox)"
+echo "  6000/udp - исходящий SRT (для клиентов)"
 echo ""
-echo "Ваш внешний IP: $EXT_IP"
-echo "Для Belabox используйте: srtla://$EXT_IP:5002"
+echo "=========================================="
